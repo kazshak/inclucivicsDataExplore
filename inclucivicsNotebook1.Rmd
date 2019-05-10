@@ -1,0 +1,273 @@
+---
+title: "R Notebook"
+output: html_notebook
+author: Kaz Shakir
+---
+
+```{r}
+# setup environment
+# 
+library(magrittr)
+library(rpart)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(gridExtra)
+
+# load and clean the initial data
+# 
+# load the csv file into a data.frame
+# convert the Date,Started field into a Date type
+# and make the County names all caps
+# 
+icData <- read.csv(file = '20181009.csv')
+icData$Date.Started <- as.Date(as.character(icData$Date.Started), format = "%m/%d/%Y")
+icData$County <- toupper(icData$County)
+
+# create a variable for the estimatedAge, and another
+# for the jobTerm (the number of years person has been in the job)
+# 
+icData$estimatedAge <- as.integer(format(Sys.Date(), "%Y")) - icData$Year.of.Birth
+icData$jobTerm <- as.integer(format(Sys.Date(), "%Y")) - as.integer(format(icData$Date.Started, "%Y"))
+
+# create a subset of the data that only includes
+# elected officials, and full-time employees
+# 
+modelSubset <- 
+  subset(icData, 
+         ((icData$Employment.Status == 'Elected' ||
+            icData$Employment.Status == 'Full Time')) &
+           (icData$Annual.Salary >= 12000)) %>%
+  droplevels()
+
+# calculate some descriptive statistics by Job Category
+# 
+a1 <- modelSubset %>%
+  group_by(EEO.Job.Cat.Desc) %>%
+  summarise(low = min(Annual.Salary), high = max(Annual.Salary), avg = mean(Annual.Salary),
+            stdDev = sd(Annual.Salary), cv = sd(Annual.Salary) / mean(Annual.Salary)) %>%
+  arrange(avg)
+
+
+```
+
+### Salary statistics by Job Description category:
+```{r}
+a1
+```
+
+* Observations: 
+  + The Elected Officials seem to have a very wide dispersion of salaries, as demonstrated by the cv ratio (whcih is the standard deviation divided by the average).
+  + The Officials and Administrators categry also seems to have a wide dispersion of values, ranging from a low of $15,000 to a high of $319,200.
+  + The "Officials and Administrators", "Professionals", and "Elected Official" categories all seem to have particularly high paid positions
+  
+### A box and whisker chart of the distribution of salaries by job description category, excluding 
+### the Elected Officials, Professionals, and Officials and Administrators
+```{r}
+ggplot(data = modelSubset[(modelSubset$EEO.Job.Cat.Desc != 'Elected Officials') &
+                            (modelSubset$EEO.Job.Cat.Desc != 'Officials and Administrators') &
+                            (modelSubset$EEO.Job.Cat.Desc != 'Professionals'),],
+       aes(x = EEO.Job.Cat.Desc, y = Annual.Salary, ymax = 100000, ymin = 0)) +
+  geom_boxplot() +
+  geom_violin(alpha = 0.4) +
+  scale_y_continuous(labels = comma) +
+  theme(axis.text.x = element_text(size = 10, angle = 25),
+        panel.background = element_rect(fill = FALSE),
+        panel.grid.major = element_line(color = 'gray'))
+  
+```
+* Observations:
+  + Based on the levels of the various boxes, it appears that there are two prevalent groups
+    + First, the Support group that includes: Administrative Support, Para-Professionals, and Service Maintenance
+    + Second, the Skilled Labor group that includes: Protective Service Workers, Skilled Craft Workers, and Technicians
+    
+### A box and whisker chart for the Elected Officials, Officials and Administrators, and Professionals
+```{r}
+ggplot(data = modelSubset[(modelSubset$EEO.Job.Cat.Desc == 'Elected Officials') |
+                            (modelSubset$EEO.Job.Cat.Desc == 'Officials and Administrators') |
+                            (modelSubset$EEO.Job.Cat.Desc == 'Professionals'),],
+       aes(x = EEO.Job.Cat.Desc, y = Annual.Salary, ymax = 325000, ymin = 0)) +
+  geom_boxplot() +
+  geom_violin(alpha = 0.4) +
+  scale_y_continuous(labels = comma) +
+  theme(axis.text.x = element_text(size = 10, angle = 25),
+        panel.background = element_rect(fill = FALSE),
+        panel.grid.major = element_line(color = 'gray'))
+  
+
+```
+The Officials and Administrators and Professionals categories could be grouped into a single category
+called Management - they seem to be similar enough.
+
+Elected officials, however, seem to have a very odd profile: a wide range, but the median is all the way to the bottom.
+
+### An ordered scatter plot of the Elcted Officials category
+```{r}
+plot(sort(modelSubset$Annual.Salary[modelSubset$EEO.Job.Cat.Desc == 'Elected Officials']),
+     ylab = "Annual Salary", xlab = "Elected Official")
+```
+Now, it seems clear that the elected officials seem to group into three distinct categories,
+with most of them below \$25k and then a small group around \$130 or \$140, and 
+a thrid group at \$170 or \$180.
+
+So, it seems that there are three distinct groups:
+  + Support
+  + Skilled Labor
+  + Management 
+  
+```{r}
+# add a column to the dataframe to represent the three major groups and Elected Officials
+# as the fourth group.
+# 
+modelSubset$group <-
+  as.factor(
+    apply(modelSubset, MARGIN = 1, FUN = function(x) {
+      if (x["EEO.Job.Cat.Desc"] %in% 
+          c('Administrative Support', 'Para-Professional', 'Service Maintenance')) 
+        {return ('Support')}
+      if (x["EEO.Job.Cat.Desc"] %in% 
+          c('Protective Service Workers', 'Skilled Craft Workers', 'Technicians')) 
+        {return ('Skilled Labor')}
+      if (x["EEO.Job.Cat.Desc"] %in% 
+          c('Officials and Administrators', 'Professionals')) 
+        {return ('Management')}
+      if (x["EEO.Job.Cat.Desc"] == 'Elected Officials') 
+        {return ('Elected')}
+    })
+  )
+```
+
+### Draw denisty of the distribution for each of the four categories
+```{r}
+ggplot(modelSubset, 
+       aes(Annual.Salary, group = group, fill = group, alpha = 0.25)) +
+  geom_density()+
+  scale_x_continuous(label = comma) +
+  ggtitle("All Groups") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggplot(modelSubset[modelSubset$group == 'Support',], 
+       aes(Annual.Salary, fill = 4, alpha = 0.25)) +
+  geom_density() +
+  scale_x_continuous(label = comma) +
+  ggtitle("Salary Disribution For Support") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggplot(modelSubset[modelSubset$group == 'Skilled Labor',], 
+       aes(Annual.Salary, fill = 4, alpha = 0.25)) +
+  geom_density() +
+  scale_x_continuous(label = comma) +
+  ggtitle("Salary Disribution For Skilled Labor") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggplot(modelSubset[modelSubset$group == 'Management',], 
+       aes(Annual.Salary, fill = 4, alpha = 0.25)) +
+  geom_density() +
+  scale_x_continuous(label = comma) +
+  ggtitle("Salary Disribution For Management") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+Each of the groups seems to be normally distributed with some outliers.  The Support group seems
+to have a small set of jobs in a low paid category; and the other groups seem to have a few on
+the very high end of the scale.
+
+```{r}
+# build a function to create summary statistics for evaluation
+# 
+summaryStats <- function(df, grp) {
+  # calculate some summary statistics for the grp group by Ethnic code
+  # first, determine the number employed in each ethnic group
+  # second, determine the average salary by ethnic group
+  # 
+  result <-
+    df[df$group == grp,] %>% 
+    group_by(Ethnic.Code.Description) %>% 
+    summarise(num_of_people = n(), avg_salary = mean(Annual.Salary)) %>% 
+    arrange(num_of_people)
+  
+  # determine the overall average salary for the grp group
+  # and then calculate the amount each ethnic group is either 
+  # above or below that average
+  #
+  AvgSal <- mean(df$Annual.Salary[df$group == grp])
+  result$avg_salary_relative_to_average <-
+    result$avg_salary - AvgSal
+  
+  return(result)
+}
+
+# build a function to create two bar charts for the summarize results
+# that were produced by the summaryStats function
+# 
+producePlots <- function(smry, grp, lmts1, brks1, lmts2, brks2) {
+  # plot a bar chart of the number of people employed in each ethnic category
+  # in the grp group, and a second graph showing the average salary
+  # by each ethnic group relative to the average for the grp group
+  # 
+  p1 <-
+    ggplot(smry, 
+         aes(reorder(Ethnic.Code.Description, num_of_people), num_of_people)) +
+    scale_y_continuous(limits = lmts1, 
+                       breaks = brks1,
+                       labels = comma) +
+    geom_col() + labs(x = NULL) + coord_flip() +
+    ggtitle(paste0("Number Of Individuals In the ", grp, 
+                   " Group \nBy Ethnic Description")) +
+    theme_minimal()
+  
+  p2 <- 
+    ggplot(smry, 
+         aes(reorder(Ethnic.Code.Description, num_of_people), avg_salary_relative_to_average,
+             fill = as.factor(sign(avg_salary_relative_to_average)))) +
+    scale_y_continuous(limits = lmts2, 
+                       breaks = brks2,
+                       labels = comma) +
+    geom_col() + labs(x = NULL) + coord_flip() +
+    ggtitle(paste0("In the ", grp, " group, how much does the annual salary \n",
+                   "deviate from the average for each Ethnic Description")) +
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  return(list(p1 = p1, p2 = p2))
+  
+}
+
+
+supportSummary <- summaryStats(modelSubset, 'Support')
+supportPlots <- producePlots(supportSummary, 'Support', 
+                             lmts1 = c(0,1400), brks1 = seq(0, 1400, 400),
+                             lmts2 = c(-5000,5000), brks2 = seq(-5000,5000,2000))
+
+grid.arrange(supportPlots$p1, supportPlots$p2, ncol = 1)
+
+```
+
+Do the same for the skilled labor group
+
+```{r}
+skilledSummary <- summaryStats(modelSubset, 'Skilled Labor')
+skilledPlots <- producePlots(skilledSummary, 'Skilled Labor', 
+                             lmts1 = c(0,2600), brks1 = seq(0, 2600, 600),
+                             lmts2 = c(-7000,7000), brks2 = seq(-7000,7000,2000))
+
+grid.arrange(skilledPlots$p1, skilledPlots$p2, ncol = 1)
+
+```
+
+Do the same calcs for the Management group
+
+```{r}
+managementSummary <- summaryStats(modelSubset, 'Management')
+managementPlots <- producePlots(managementSummary, 'Management', 
+                             lmts1 = c(0,2200), brks1 = seq(0, 2200, 400),
+                             lmts2 = c(-8000,8000), brks2 = seq(-8000,8000,2000))
+
+grid.arrange(managementPlots$p1, managementPlots$p2, ncol = 1)
+
+```
+
